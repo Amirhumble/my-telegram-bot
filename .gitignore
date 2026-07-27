@@ -1,3 +1,8 @@
-node_modules
+node_modules/
 .env
-Images/ders_image.jpg
+.DS_Store
+*.log
+.npm/
+coverage/
+.idea/
+.vscode/
