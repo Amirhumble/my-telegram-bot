@@ -7,6 +7,10 @@ const {
 } = require('../config/env');
 const logger = require('../utils/logger');
 
+
+logger.info('Supabase configuration', {
+  url: SUPABASE_URL,
+});
 /**
  * Supabase client using the service role key.
  * This key is server-side only — never expose it to clients.
