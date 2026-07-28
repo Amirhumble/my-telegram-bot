@@ -37,7 +37,7 @@ async function handleStart(message) {
 
     if (result.ok) {
       referralNote =
-        '\n\n📢 እባክዎ ቻናላችንን ይቀላቀሉ። ከተቀላቀሉ በኋላ <b>✅ I Joined</b> ይጫኑ።';
+        '\n\n📢 እባክዎ ቻናላችንን ይቀላቀሉ። ከተቀላቀሉ በኋላ ወደ እዚህ ተመልሰው<b>✅ I Joined</b> የሚለውን ይጫኑ።';
     }
   }
 
