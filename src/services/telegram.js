@@ -247,6 +247,59 @@ async function answerCallbackQuery(callbackQueryId, text = '', showAlert = false
   });
 }
 
+/**
+ * Edit text of an existing bot message (used by admin panel to avoid spamming).
+ * Gracefully ignores "message is not modified" errors.
+ */
+async function editMessageText(chatId, messageId, text, extra = {}) {
+  try {
+    return await apiPost('editMessageText', {
+      chat_id: chatId,
+      message_id: messageId,
+      text,
+      parse_mode: extra.parse_mode || 'HTML',
+      disable_web_page_preview: extra.disable_web_page_preview ?? true,
+      reply_markup: extra.reply_markup,
+    });
+  } catch (err) {
+    // Telegram returns 400 "message is not modified" — safe to ignore
+    if (err.message && err.message.includes('message is not modified')) return null;
+    throw err;
+  }
+}
+
+/**
+ * Edit only the inline keyboard of an existing message.
+ */
+async function editMessageReplyMarkup(chatId, messageId, replyMarkup) {
+  try {
+    return await apiPost('editMessageReplyMarkup', {
+      chat_id: chatId,
+      message_id: messageId,
+      reply_markup: replyMarkup,
+    });
+  } catch (err) {
+    if (err.message && err.message.includes('message is not modified')) return null;
+    throw err;
+  }
+}
+
+/**
+ * Delete a message silently (e.g. close admin panel).
+ */
+async function deleteMessage(chatId, messageId) {
+  try {
+    return await apiPost('deleteMessage', {
+      chat_id: chatId,
+      message_id: messageId,
+    });
+  } catch (err) {
+    // Message may already be deleted — ignore
+    logger.warn('deleteMessage failed (ignored)', { chatId, messageId, message: err.message });
+    return null;
+  }
+}
+
 module.exports = {
   sleep,
   withRetry,
@@ -261,6 +314,9 @@ module.exports = {
   deleteWebhook,
   setMyCommands,
   answerCallbackQuery,
+  editMessageText,
+  editMessageReplyMarkup,
+  deleteMessage,
   apiPost,
   apiGet,
 };

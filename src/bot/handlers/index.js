@@ -11,6 +11,11 @@ const {
 } = require('./feedback');
 const { handleJoinedCallback } = require('./referral');
 const { handleAdminCommand } = require('./admin');
+const {
+  handleAdminEntry,
+  handleAdminCallback,
+  handleAdminMessage,
+} = require('./adminPanel');
 const telegram = require('../../services/telegram');
 const { mainMenuKeyboard } = require('../keyboards/mainMenu');
 const logger = require('../../utils/logger');
@@ -22,7 +27,6 @@ const { safeRun } = require('../../utils/errors');
 function normalizeCommand(text) {
   if (!text) return '';
   const trimmed = text.trim();
-  // /start@MyBot payload  → keep payload
   const match = trimmed.match(/^\/([a-zA-Z0-9_]+)(?:@\w+)?(?:\s+([\s\S]*))?$/);
   if (!match) return trimmed;
   const cmd = match[1].toLowerCase();
@@ -47,6 +51,13 @@ async function handleUpdate(update) {
 async function handleCallbackQuery(callbackQuery) {
   const data = callbackQuery.data;
 
+  // ── Admin panel callbacks (highest priority) ─────────────
+  if (data && data.startsWith('ap:')) {
+    await handleAdminCallback(callbackQuery);
+    return;
+  }
+
+  // ── Existing callbacks ────────────────────────────────────
   if (data === 'joined_channel') {
     await handleJoinedCallback(callbackQuery);
     return;
@@ -57,28 +68,40 @@ async function handleCallbackQuery(callbackQuery) {
 }
 
 async function handleMessage(message) {
-  // Only process text messages for this bot
+  const chatId = message.chat.id;
+  const rawText = (message.text || '').trim();
+  const text = rawText ? normalizeCommand(rawText) : '';
+
+  if (rawText) {
+    logger.debug('Incoming message', { chatId, text: rawText.slice(0, 80) });
+  }
+
+  // 1) Admin panel wizard interceptor — handles non-text wizard steps too
+  //    (PDF uploads, photo uploads, etc.). Must come before all text routing.
+  const adminHandled = await handleAdminMessage(message);
+  if (adminHandled) return;
+
+  // Only text messages pass through to the remaining routes
   if (!message.text) return;
 
-  const chatId = message.chat.id;
-  const rawText = message.text.trim();
-  const text = normalizeCommand(rawText);
-
-  logger.debug('Incoming message', { chatId, text: rawText.slice(0, 80) });
-
-  // 1) Multi-step feedback capture (before menu routing)
+  // 2) Multi-step feedback capture (before menu routing)
   const handledFeedback = await maybeHandlePendingFeedback(message);
   if (handledFeedback) return;
 
-  // 2) Admin commands (silently no-op for non-admins when matched)
-  if (text.startsWith('/admin_')) {
-    const handled = await handleAdminCommand({ ...message, text });
-    if (handled) return;
-    // Non-admin: fall through to unknown / ignore
+  // 3) /admin command — opens inline panel
+  if (text === '/admin' || text.startsWith('/admin@')) {
+    await handleAdminEntry({ ...message, text: rawText });
     return;
   }
 
-  // 3) Reply keyboard buttons
+  // 4) Legacy /admin_* text commands (silently no-op for non-admins)
+  if (text.startsWith('/admin_')) {
+    const handled = await handleAdminCommand({ ...message, text });
+    if (handled) return;
+    return;
+  }
+
+  // 5) Reply keyboard buttons
   if (rawText === BUTTONS.SOFT_COPIES) {
     await handleSoftCopies(message);
     return;
@@ -96,9 +119,8 @@ async function handleMessage(message) {
     return;
   }
 
-  // 4) Slash commands (backward compatible)
+  // 6) Slash commands (backward compatible)
   if (text === '/start' || text.startsWith('/start ')) {
-    // Preserve original payload from raw text for deep links
     await handleStart({ ...message, text: rawText });
     return;
   }
@@ -132,7 +154,7 @@ async function handleMessage(message) {
     return;
   }
 
-  // Unknown text — gently re-show menu (do not spam)
+  // 7) Unknown text — gently re-show menu (do not spam)
   await telegram.sendMessage(
     chatId,
     'እባክዎ ከታች ካለው Menu አንዱን ይምረጡ።',

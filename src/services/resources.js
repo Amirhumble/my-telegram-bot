@@ -16,6 +16,7 @@ async function getResourcesByType(type) {
     .from('resources')
     .select('*')
     .eq('type', type)
+    .eq('is_active', true)
     .order('sort_order', { ascending: true })
     .order('id', { ascending: true });
 
