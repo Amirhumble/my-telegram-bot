@@ -116,13 +116,18 @@ async function handleAdminCallback(callbackQuery) {
   const callbackId = callbackQuery.id;
   const adminId = callbackQuery.from?.id;
 
-  // Auth guard
+  // ── Answer callback immediately — Telegram times out after ~10s ──
+  // Must happen before any DB/network work, regardless of auth result.
+  await ack(callbackId);
+
+  // Auth guard (isAdmin is synchronous — no DB call)
   if (!adminService.isAdmin(adminId)) {
-    await ack(callbackId, 'Not authorized.');
+    // Send a short alert since we already ack'd silently above
+    try {
+      await telegram.answerCallbackQuery(callbackId, 'Not authorized.', true);
+    } catch (_) { /* already answered */ }
     return true;
   }
-
-  await ack(callbackId);
 
   const session = getAdminSession(adminId);
   const panelMsgId = session?.panelMessageId || messageId;
@@ -218,6 +223,9 @@ async function handleAdminCallback(callbackQuery) {
     if (data === 'ap:comp:top') return await handleCompTop(chatId, adminId, panelMsgId);
     if (data === 'ap:comp:stats') return await handleCompStats(chatId, adminId, panelMsgId);
     if (data === 'ap:comp:export') return await handleCompExport(chatId, adminId, panelMsgId);
+
+    // Unknown ap: callback — silently handled (ack already sent above)
+    logger.warn('Unknown admin panel callback', { data });
 
   } catch (err) {
     logger.error('Admin panel callback error', {
@@ -435,7 +443,7 @@ async function handleBroadcastConfirm(chatId, adminId, panelMsgId) {
 
   await showPanel(chatId, adminId,
     '📣 <b>Broadcasting…</b>\n\nThis may take a moment. Please wait.',
-    null,
+    backHomeKeyboard('ap:home'),
     panelMsgId
   );
 

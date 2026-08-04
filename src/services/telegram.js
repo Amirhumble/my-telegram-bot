@@ -96,24 +96,30 @@ async function apiGet(method, params = {}) {
 // ─── Messaging ───────────────────────────────────────────────
 
 async function sendMessage(chatId, text, extra = {}) {
-  return apiPost('sendMessage', {
+  const payload = {
     chat_id: chatId,
     text,
     parse_mode: extra.parse_mode || 'HTML',
     disable_web_page_preview: extra.disable_web_page_preview ?? true,
-    reply_markup: extra.reply_markup,
-    ...extra,
-  });
+  };
+  // Only include reply_markup when it is a real object — Telegram rejects null/undefined
+  if (extra.reply_markup && typeof extra.reply_markup === 'object') {
+    payload.reply_markup = extra.reply_markup;
+  }
+  return apiPost('sendMessage', payload);
 }
 
 async function sendPhotoByFileId(chatId, fileId, extra = {}) {
-  return apiPost('sendPhoto', {
+  const payload = {
     chat_id: chatId,
     photo: fileId,
     caption: extra.caption,
     parse_mode: extra.parse_mode || 'HTML',
-    reply_markup: extra.reply_markup,
-  });
+  };
+  if (extra.reply_markup && typeof extra.reply_markup === 'object') {
+    payload.reply_markup = extra.reply_markup;
+  }
+  return apiPost('sendPhoto', payload);
 }
 
 async function sendDocumentByFileId(chatId, fileId, extra = {}) {
@@ -252,17 +258,20 @@ async function answerCallbackQuery(callbackQueryId, text = '', showAlert = false
  * Gracefully ignores "message is not modified" errors.
  */
 async function editMessageText(chatId, messageId, text, extra = {}) {
+  const payload = {
+    chat_id: chatId,
+    message_id: messageId,
+    text,
+    parse_mode: extra.parse_mode || 'HTML',
+    disable_web_page_preview: extra.disable_web_page_preview ?? true,
+  };
+  // Only include reply_markup when it is a real object — Telegram rejects null/undefined
+  if (extra.reply_markup && typeof extra.reply_markup === 'object') {
+    payload.reply_markup = extra.reply_markup;
+  }
   try {
-    return await apiPost('editMessageText', {
-      chat_id: chatId,
-      message_id: messageId,
-      text,
-      parse_mode: extra.parse_mode || 'HTML',
-      disable_web_page_preview: extra.disable_web_page_preview ?? true,
-      reply_markup: extra.reply_markup,
-    });
+    return await apiPost('editMessageText', payload);
   } catch (err) {
-    // Telegram returns 400 "message is not modified" — safe to ignore
     if (err.message && err.message.includes('message is not modified')) return null;
     throw err;
   }
