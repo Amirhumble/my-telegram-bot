@@ -24,6 +24,7 @@ const { PUBLIC_COMMANDS } = require('./bot/commands');
 const { handleUpdate } = require('./bot/handlers');
 const logger = require('./utils/logger');
 const { clearAllSessions } = require('./utils/session');
+const { startCron, stopCron } = require('./services/referralCron');
 
 const app = express();
 app.use(express.json({ limit: '1mb' }));
@@ -102,6 +103,7 @@ async function start() {
 
     try {
       await initBot();
+      startCron(); // Layer 3: background referral verification
       logger.info('Bot is online');
     } catch (err) {
       logger.error('Bot init failed — check TOKEN, SERVER_URL, and network', {
@@ -124,6 +126,7 @@ async function shutdown(signal) {
   logger.info(`Received ${signal} — graceful shutdown starting`);
 
   clearAllSessions();
+  stopCron(); // Stop background referral verification job
 
   const forceTimer = setTimeout(() => {
     logger.error('Forced shutdown after timeout');

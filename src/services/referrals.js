@@ -246,6 +246,146 @@ function buildInvitationLink(telegramId, botUsername) {
   return `https://t.me/${botUsername}?start=${telegramId}`;
 }
 
+// ─── Hybrid verification helpers ─────────────────────────────
+
+/**
+ * Automatically verify a single pending referral by checking channel membership.
+ * Used by both Layer 2 (per-message check) and Layer 3 (cron job).
+ *
+ * Does nothing if the referral is already verified.
+ * Updates last_checked_at and check_attempts regardless of outcome
+ * (columns are optional — query is safe if migration 003 hasn't run yet).
+ *
+ * @param {object} referral  - row from the referrals table
+ * @returns {{ verified: boolean, reason: string }}
+ */
+async function autoVerifyReferral(referral) {
+  if (!referral || referral.verified) {
+    return { verified: true, reason: 'already_verified' };
+  }
+
+  const referredId = Number(referral.referred_id);
+
+  // Build the update payload, but only include tracking columns when present
+  // in the row (safe for both pre- and post-migration 003 schemas).
+  const trackingUpdate = {};
+  if ('last_checked_at' in referral || referral.last_checked_at !== undefined) {
+    trackingUpdate.last_checked_at = new Date().toISOString();
+  }
+  if ('check_attempts' in referral || referral.check_attempts !== undefined) {
+    trackingUpdate.check_attempts = (Number(referral.check_attempts) || 0) + 1;
+  }
+
+  // Always record the attempt even if the tracking columns don't exist yet —
+  // the update will simply ignore unknown fields in Supabase.
+  const attemptPayload = {
+    last_checked_at: new Date().toISOString(),
+    check_attempts: (Number(referral.check_attempts) || 0) + 1,
+  };
+
+  let isMember = false;
+  try {
+    isMember = await telegram.isChannelMember(referredId);
+  } catch (err) {
+    logger.warn('autoVerifyReferral: membership check failed', {
+      referred_id: referredId,
+      referral_id: referral.id,
+      message: err.message,
+    });
+    // Persist the attempt count even on Telegram error, best-effort
+    await _updateAttempt(referral.id, attemptPayload).catch(() => {});
+    return { verified: false, reason: 'telegram_error' };
+  }
+
+  if (!isMember) {
+    await _updateAttempt(referral.id, attemptPayload).catch(() => {});
+    return { verified: false, reason: 'not_member' };
+  }
+
+  // Member confirmed — mark joined_channel on the user record
+  await usersService.markJoinedChannel(referredId, true).catch((err) => {
+    logger.warn('autoVerifyReferral: markJoinedChannel failed', {
+      referred_id: referredId,
+      message: err.message,
+    });
+  });
+
+  // Mark the referral verified
+  const { data, error } = await supabase
+    .from('referrals')
+    .update({
+      verified: true,
+      last_checked_at: new Date().toISOString(),
+      check_attempts: (Number(referral.check_attempts) || 0) + 1,
+    })
+    .eq('id', referral.id)
+    .select()
+    .single();
+
+  if (error) {
+    logger.error('autoVerifyReferral: update failed', {
+      referral_id: referral.id,
+      message: error.message,
+    });
+    throw new AppError('Failed to auto-verify referral', {
+      code: 'DB_AUTO_VERIFY',
+      details: error,
+    });
+  }
+
+  logger.info('Referral auto-verified', {
+    referral_id: data.id,
+    referrer: data.referrer_id,
+    referred: data.referred_id,
+  });
+
+  return { verified: true, reason: 'verified', referral: data };
+}
+
+/** Internal helper: update tracking columns only (no verified flag change). */
+async function _updateAttempt(referralId, payload) {
+  await supabase
+    .from('referrals')
+    .update(payload)
+    .eq('id', referralId);
+}
+
+/**
+ * Fetch all unverified referrals for the background cron job.
+ * Ordered by last_checked_at ASC (nulls first) so the least-recently-checked
+ * rows are processed first.
+ *
+ * Safe when migration 003 hasn't run — falls back gracefully by ordering on id.
+ *
+ * @returns {Array<object>}
+ */
+async function getPendingReferrals() {
+  const { data, error } = await supabase
+    .from('referrals')
+    .select('*')
+    .eq('verified', false)
+    .order('id', { ascending: true });
+
+  if (error) {
+    logger.error('getPendingReferrals failed', {
+      message: error.message,
+      code: error.code,
+    });
+    throw new AppError('Failed to fetch pending referrals', {
+      code: 'DB_PENDING_REFERRALS',
+      details: error,
+    });
+  }
+
+  // Sort in JS: nulls first (never checked), then oldest check first
+  return (data || []).sort((a, b) => {
+    if (!a.last_checked_at && !b.last_checked_at) return 0;
+    if (!a.last_checked_at) return -1;
+    if (!b.last_checked_at) return 1;
+    return new Date(a.last_checked_at) - new Date(b.last_checked_at);
+  });
+}
+
 module.exports = {
   recordReferral,
   getReferralByReferred,
@@ -255,4 +395,6 @@ module.exports = {
   getTopReferrers,
   getUserReferralStats,
   buildInvitationLink,
+  autoVerifyReferral,
+  getPendingReferrals,
 };

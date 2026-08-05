@@ -16,6 +16,7 @@ const {
   handleAdminCallback,
   handleAdminMessage,
 } = require('./adminPanel');
+const referralsService = require('../../services/referrals');
 const telegram = require('../../services/telegram');
 const { mainMenuKeyboard } = require('../keyboards/mainMenu');
 const logger = require('../../utils/logger');
@@ -75,6 +76,13 @@ async function handleMessage(message) {
   if (rawText) {
     logger.debug('Incoming message', { chatId, text: rawText.slice(0, 80) });
   }
+
+  // Layer 2 — Transparent referral auto-verification.
+  // Fire-and-forget: runs in the background without blocking message routing
+  // or sending anything to the user. One failure never affects message handling.
+  _maybeAutoVerify(message.from?.id).catch((err) => {
+    logger.warn('Layer 2 auto-verify threw unexpectedly', { message: err.message });
+  });
 
   // 1) Admin panel wizard interceptor — handles non-text wizard steps too
   //    (PDF uploads, photo uploads, etc.). Must come before all text routing.
@@ -160,6 +168,46 @@ async function handleMessage(message) {
     'እባክዎ ከታች ካለው Menu አንዱን ይምረጡ።',
     { reply_markup: mainMenuKeyboard() }
   );
+}
+
+// ─── Layer 2: Transparent per-message auto-verification ──────
+
+/**
+ * Called fire-and-forget on every incoming message.
+ * Checks whether the sender has a pending (unverified) referral and,
+ * if so, silently verifies it if they are now a channel member.
+ *
+ * Never sends any message to the user — purely a background check.
+ * Never throws — all errors are caught and logged.
+ *
+ * @param {number|undefined} userId
+ */
+async function _maybeAutoVerify(userId) {
+  if (!userId) return;
+
+  let referral;
+  try {
+    referral = await referralsService.getReferralByReferred(userId);
+  } catch (err) {
+    logger.warn('Layer 2: getReferralByReferred failed', {
+      userId,
+      message: err.message,
+    });
+    return;
+  }
+
+  // No referral, or already verified — nothing to do
+  if (!referral || referral.verified) return;
+
+  try {
+    await referralsService.autoVerifyReferral(referral);
+  } catch (err) {
+    logger.warn('Layer 2: autoVerifyReferral failed', {
+      userId,
+      referral_id: referral.id,
+      message: err.message,
+    });
+  }
 }
 
 module.exports = {

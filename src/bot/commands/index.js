@@ -5,11 +5,11 @@
  * Admin commands are intentionally omitted from the public menu.
  */
 const PUBLIC_COMMANDS = [
-  { command: 'start', description: 'Start the bot / main menu' },
-  { command: 'ders_program', description: 'የደርስ ፕሮግራሞች' },
+  { command: 'start', description: 'ቦቱን ለማስጀመር / main menu' },
+  { command: 'ders_program', description: 'የሸይኽ ሙሀመድ አሚን የደርስ ፕሮግራሞች' },
   { command: 'soft_copies', description: 'የኪታቦቹን ሶፍት ኮፒ' },
   { command: 'feedback', description: 'አስተያየት ለመስጠት' },
-  { command: 'competition', description: 'Get your invitation link' },
+  { command: 'competition', description: 'የመጋበዣ ሊንክ ለመቀበል' },
 ];
 
 module.exports = {

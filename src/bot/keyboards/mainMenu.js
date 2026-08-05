@@ -5,10 +5,10 @@
  * Labels must match handler button text exactly.
  */
 const BUTTONS = {
-  SOFT_COPIES: '📚 Soft Copies',
-  DERS_PROGRAM: '📅 Ders Program',
-  COMPETITION_LINK: '🔗 Competition Link',
-  FEEDBACK: '💬 Feedback',
+  SOFT_COPIES: '📚 የተቀሩ ኪታቦች ሶፍት ኮፒ(ፒዲኤፍ)',
+  DERS_PROGRAM: '📅 የሸይኽ ሙሀመድ አሚን የደርስ መርሀግብሮች',
+  COMPETITION_LINK: '🔗 የመጋበዣ ሊንክ ለማግኘት',
+  FEEDBACK: '💬 አስተያየት ለመስጠት',
 };
 
 function mainMenuKeyboard() {

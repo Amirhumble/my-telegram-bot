@@ -10,10 +10,10 @@ function channelJoinKeyboard() {
   const rows = [];
 
   if (CHANNEL_INVITE_LINK) {
-    rows.push([{ text: '📢 Join Channel', url: CHANNEL_INVITE_LINK }]);
+    rows.push([{ text: '📢 ቻናሉን ለመቀላቀል', url: CHANNEL_INVITE_LINK }]);
   }
 
-  rows.push([{ text: '✅ I Joined', callback_data: 'joined_channel' }]);
+  rows.push([{ text: '✅ ቻናሉን ተቀላቅያለው', callback_data: 'joined_channel' }]);
 
   return {
     inline_keyboard: rows,
