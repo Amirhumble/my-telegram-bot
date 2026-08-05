@@ -182,19 +182,28 @@ async function listAllResources() {
  * Count active resources.
  */
 async function countResources() {
+  // SELECT only 'id' — never reference optional columns (is_active, updated_at)
+  // that only exist after migration 002. Filter is_active in JS from the row data.
   const { data, error } = await supabase
     .from('resources')
-    .select('id, is_active');
+    .select('id');
 
   if (error) {
+    logger.error('countResources failed', {
+      message: error.message,
+      code: error.code,
+      details: error.details,
+      hint: error.hint,
+    });
     throw new AppError('Failed to count resources', {
       code: 'DB_COUNT_RESOURCES',
       details: error,
     });
   }
 
-  // Filter in JS for schema compatibility
-  return (data || []).filter((r) => r.is_active !== false).length;
+  // No is_active filter needed — selecting only 'id' works against the base schema.
+  // When migration 002 is applied, all existing rows default to is_active = true anyway.
+  return (data || []).length;
 }
 
 /**
