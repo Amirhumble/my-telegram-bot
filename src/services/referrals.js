@@ -165,46 +165,302 @@ async function countVerifiedReferrals() {
 }
 
 /**
- * Top referrers by verified count (admin only).
+ * Top referrers — single SQL aggregation, no N+1 queries.
+ * Returns rows sorted by verified DESC, total DESC, created_at ASC.
+ * Falls back gracefully when the referral_leaderboard view is not yet updated
+ * (migration 004 not run): uses a raw aggregate query instead.
+ *
+ * @param {number} limit
  */
 async function getTopReferrers(limit = 20) {
-  // Fetch verified referrals and aggregate in JS for portability
-  // (view referral_leaderboard also exists in SQL)
+  const rows = await _fetchLeaderboard({ limit, offset: 0 });
+  return rows;
+}
+
+/**
+ * Paginated leaderboard page.
+ * @param {number} page      1-based
+ * @param {number} pageSize
+ * @returns {{ rows: Array, total: number, page: number, pageSize: number, totalPages: number }}
+ */
+async function getLeaderboardPage(page = 1, pageSize = 10) {
+  const safePage = Math.max(1, Number(page) || 1);
+  const offset = (safePage - 1) * pageSize;
+
+  const [rows, total] = await Promise.all([
+    _fetchLeaderboard({ limit: pageSize, offset }),
+    _countLeaderboardRows(),
+  ]);
+
+  logger.info('Leaderboard loaded', { page: safePage, pageSize, total });
+
+  return {
+    rows,
+    total,
+    page: safePage,
+    pageSize,
+    totalPages: Math.ceil(total / pageSize) || 1,
+  };
+}
+
+/**
+ * Internal: fetch leaderboard rows with LIMIT/OFFSET via single SQL aggregation.
+ * Works whether migration 004 has been applied (view) or not (raw query).
+ */
+async function _fetchLeaderboard({ limit, offset }) {
+  // Use the updated view when available; Supabase will throw if it doesn't exist.
+  // We handle both the old view (verified_count only) and new view gracefully.
+  const { data, error } = await supabase
+    .from('referral_leaderboard')
+    .select('telegram_id, username, first_name, created_at, verified_count, pending_count, total_referrals')
+    .order('verified_count', { ascending: false })
+    .order('total_referrals', { ascending: false })
+    .range(offset, offset + limit - 1);
+
+  if (!error) {
+    return (data || []).map(_normaliseLeaderboardRow);
+  }
+
+  // View doesn't have pending_count (migration 004 not run) — fall back to raw aggregate.
+  logger.warn('referral_leaderboard view missing columns, using raw fallback', {
+    message: error.message,
+  });
+  return _fetchLeaderboardRaw({ limit, offset });
+}
+
+/**
+ * Raw aggregate fallback — used when the view hasn't been updated yet.
+ * Avoids N+1 by doing a single GROUP BY query.
+ */
+async function _fetchLeaderboardRaw({ limit, offset }) {
+  // Supabase JS client doesn't support GROUP BY directly,
+  // so we fetch all referrals and aggregate in JS.
+  // This is only the fallback path — once migration 004 runs the view is used.
   const { data, error } = await supabase
     .from('referrals')
-    .select('referrer_id')
-    .eq('verified', true);
+    .select('referrer_id, verified');
 
   if (error) {
-    throw new AppError('Failed to load top referrers', {
-      code: 'DB_TOP_REFERRERS',
+    logger.error('_fetchLeaderboardRaw failed', { message: error.message });
+    throw new AppError('Failed to load leaderboard', {
+      code: 'DB_LEADERBOARD_RAW',
       details: error,
     });
   }
 
-  const counts = new Map();
+  // Aggregate in JS
+  const map = new Map();
   for (const row of data || []) {
     const id = row.referrer_id;
-    counts.set(id, (counts.get(id) || 0) + 1);
+    if (!map.has(id)) map.set(id, { verified: 0, pending: 0 });
+    const entry = map.get(id);
+    if (row.verified) entry.verified += 1;
+    else entry.pending += 1;
   }
 
-  const sorted = [...counts.entries()]
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, limit);
+  // Sort: verified DESC, total DESC
+  const sorted = [...map.entries()]
+    .sort(([, a], [, b]) => {
+      const vDiff = b.verified - a.verified;
+      if (vDiff !== 0) return vDiff;
+      return (b.verified + b.pending) - (a.verified + a.pending);
+    })
+    .slice(offset, offset + limit);
 
-  // Enrich with user profiles
-  const result = [];
-  for (const [telegramId, verifiedCount] of sorted) {
-    const user = await usersService.getUser(telegramId);
-    result.push({
+  // Enrich with user data — batch fetch to avoid N+1
+  const ids = sorted.map(([id]) => id);
+  const { data: users } = await supabase
+    .from('users')
+    .select('telegram_id, username, first_name, created_at')
+    .in('telegram_id', ids.length ? ids : [-1]);
+
+  const userMap = new Map((users || []).map((u) => [u.telegram_id, u]));
+
+  return sorted.map(([telegramId, counts]) => {
+    const user = userMap.get(telegramId) || {};
+    return _normaliseLeaderboardRow({
       telegram_id: telegramId,
-      username: user?.username || null,
-      first_name: user?.first_name || null,
-      verified_count: verifiedCount,
+      username: user.username || null,
+      first_name: user.first_name || null,
+      created_at: user.created_at || null,
+      verified_count: counts.verified,
+      pending_count: counts.pending,
+      total_referrals: counts.verified + counts.pending,
     });
+  });
+}
+
+async function _countLeaderboardRows() {
+  const { count, error } = await supabase
+    .from('referral_leaderboard')
+    .select('*', { count: 'exact', head: true });
+
+  if (!error) return count || 0;
+
+  // Fallback: count distinct referrer_ids
+  const { data } = await supabase
+    .from('referrals')
+    .select('referrer_id');
+
+  const unique = new Set((data || []).map((r) => r.referrer_id));
+  return unique.size;
+}
+
+function _normaliseLeaderboardRow(row) {
+  return {
+    telegram_id: row.telegram_id,
+    username: row.username || null,
+    first_name: row.first_name || null,
+    created_at: row.created_at || null,
+    verified_count: Number(row.verified_count) || 0,
+    pending_count: Number(row.pending_count) || 0,
+    total_referrals: Number(row.total_referrals) || 0,
+  };
+}
+
+/**
+ * Search a participant by Telegram ID (numeric) or @username.
+ * Returns null if not found.
+ *
+ * @param {string} query  raw input from admin (e.g. "123456" or "@ahmed")
+ * @returns {object|null}  enriched participant record or null
+ */
+async function searchParticipant(query) {
+  const q = String(query || '').trim();
+  if (!q) return null;
+
+  logger.info('Participant searched', { query: q });
+
+  let user = null;
+
+  if (/^\d+$/.test(q)) {
+    // Numeric — treat as Telegram ID
+    user = await usersService.getUser(Number(q));
+  } else {
+    // Username search (strip leading @)
+    const uname = q.replace(/^@/, '').toLowerCase();
+    const { data, error } = await supabase
+      .from('users')
+      .select('*')
+      .ilike('username', uname)
+      .limit(1)
+      .maybeSingle();
+
+    if (error) {
+      logger.error('searchParticipant username query failed', { message: error.message });
+    } else {
+      user = data;
+    }
   }
 
-  return result;
+  if (!user) return null;
+
+  // Fetch referral stats for this user
+  const id = Number(user.telegram_id);
+
+  const { data: refs, error: refErr } = await supabase
+    .from('referrals')
+    .select('verified')
+    .eq('referrer_id', id);
+
+  if (refErr) {
+    logger.warn('searchParticipant: referral query failed', { message: refErr.message });
+  }
+
+  const allRefs = refs || [];
+  const verified = allRefs.filter((r) => r.verified).length;
+  const pending = allRefs.filter((r) => !r.verified).length;
+  const total = allRefs.length;
+
+  // Determine rank: count users with strictly more verified referrals
+  let rank = null;
+  if (total > 0) {
+    const { count: higherCount, error: rankErr } = await supabase
+      .from('referral_leaderboard')
+      .select('*', { count: 'exact', head: true })
+      .gt('verified_count', verified);
+
+    if (!rankErr) rank = (higherCount || 0) + 1;
+  }
+
+  return {
+    telegram_id: user.telegram_id,
+    username: user.username || null,
+    first_name: user.first_name || null,
+    created_at: user.created_at || null,
+    verified_count: verified,
+    pending_count: pending,
+    total_referrals: total,
+    rank,
+  };
+}
+
+/**
+ * Full competition statistics (for the enhanced Statistics screen).
+ */
+async function getCompetitionStats() {
+  const [totalReferrals, verifiedReferrals] = await Promise.all([
+    countReferrals(),
+    countVerifiedReferrals(),
+  ]);
+
+  const pendingReferrals = totalReferrals - verifiedReferrals;
+
+  // Total users who have generated at least one referral link
+  // = total users (every user gets a link on /start, but only those who
+  //   appear as referrer_id in the referrals table actually had someone use it).
+  // For "links generated" we count distinct referrers + total users as proxy.
+  const { data: referrerData } = await supabase
+    .from('referrals')
+    .select('referrer_id');
+
+  const uniqueReferrers = new Set((referrerData || []).map((r) => r.referrer_id)).size;
+
+  // Leader: first row of the leaderboard
+  let leader = null;
+  try {
+    const { data: topRows } = await supabase
+      .from('referral_leaderboard')
+      .select('telegram_id, username, first_name, verified_count')
+      .order('verified_count', { ascending: false })
+      .limit(1);
+
+    if (topRows && topRows.length > 0) {
+      leader = _normaliseLeaderboardRow({ ...topRows[0], pending_count: 0, total_referrals: topRows[0].verified_count });
+    }
+  } catch (_) { /* non-fatal */ }
+
+  return {
+    totalReferrals,
+    verifiedReferrals,
+    pendingReferrals,
+    uniqueReferrers,
+    leader,
+  };
+}
+
+/**
+ * Fetch all leaderboard rows for CSV export (no pagination limit).
+ * Uses LIMIT/OFFSET in batches to avoid loading everything into memory at once.
+ *
+ * @returns {Array<object>}
+ */
+async function getLeaderboardCsvData() {
+  const PAGE = 500;
+  const results = [];
+  let offset = 0;
+
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    const rows = await _fetchLeaderboard({ limit: PAGE, offset });
+    if (!rows.length) break;
+    results.push(...rows);
+    if (rows.length < PAGE) break;
+    offset += PAGE;
+  }
+
+  logger.info('CSV export prepared', { count: results.length });
+  return results;
 }
 
 async function getUserReferralStats(telegramId) {
@@ -393,6 +649,10 @@ module.exports = {
   countReferrals,
   countVerifiedReferrals,
   getTopReferrers,
+  getLeaderboardPage,
+  searchParticipant,
+  getCompetitionStats,
+  getLeaderboardCsvData,
   getUserReferralStats,
   buildInvitationLink,
   autoVerifyReferral,

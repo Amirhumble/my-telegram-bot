@@ -37,6 +37,7 @@ const {
   broadcastKeyboard,
   broadcastConfirmKeyboard,
   competitionKeyboard,
+  leaderboardPagingKeyboard,
   resourceListKeyboard,
   confirmDeleteKeyboard,
   cancelKeyboard,
@@ -220,9 +221,14 @@ async function handleAdminCallback(callbackQuery) {
     }
 
     // ── Competition sub-actions ──────────────────────────────
-    if (data === 'ap:comp:top') return await handleCompTop(chatId, adminId, panelMsgId);
+    if (data === 'ap:comp:top') return await handleCompTop(chatId, adminId, panelMsgId, 1);
+    if (data === 'ap:comp:search') return await startSearchParticipant(chatId, adminId, panelMsgId);
     if (data === 'ap:comp:stats') return await handleCompStats(chatId, adminId, panelMsgId);
     if (data === 'ap:comp:export') return await handleCompExport(chatId, adminId, panelMsgId);
+    if (data.startsWith('ap:comp:page:')) {
+      const page = parseInt(data.replace('ap:comp:page:', ''), 10) || 1;
+      return await handleCompTop(chatId, adminId, panelMsgId, page);
+    }
 
     // Unknown ap: callback — silently handled (ack already sent above)
     logger.warn('Unknown admin panel callback', { data });
@@ -245,22 +251,235 @@ async function handleAdminCallback(callbackQuery) {
   return true;
 }
 
-// ─── Statistics ────────────────────────────────────────────────
+// ─── Competition: Statistics ───────────────────────────────────
 
 async function handleStatsCallback(chatId, adminId, panelMsgId) {
   const stats = await adminPanelService.getPanelStats();
+
+  let leaderLine = '—';
+  if (stats.leader) {
+    const name = escapeHtml(stats.leader.first_name || '—');
+    const uname = stats.leader.username ? ` (@${escapeHtml(stats.leader.username)})` : '';
+    leaderLine = `${name}${uname}\nVerified: <b>${stats.leader.verified_count}</b>`;
+  }
+
   const text =
-    `📊 <b>Statistics</b>\n\n` +
-    `👥 Total users: <b>${stats.totalUsers}</b>\n` +
-    `✅ Joined channel: <b>${stats.joinedChannel}</b>\n` +
-    `📩 Feedback count: <b>${stats.feedbackCount}</b>\n` +
-    `📚 Total resources: <b>${stats.totalResources}</b>\n` +
-    `🔗 Verified referrals: <b>${stats.verifiedReferrals}</b>`;
-  await showPanel(chatId, adminId, text, backHomeKeyboard('ap:home'), panelMsgId);
+    `📊 <b>Competition Statistics</b>\n\n` +
+    `👥 Users: <b>${stats.totalUsers}</b>\n` +
+    `🔗 Referral Links: <b>${stats.uniqueReferrers ?? '—'}</b>\n` +
+    `✅ Verified: <b>${stats.verifiedReferrals}</b>\n` +
+    `⏳ Pending: <b>${stats.pendingReferrals ?? '—'}</b>\n` +
+    `📚 Resources: <b>${stats.totalResources}</b>\n` +
+    `💬 Feedback: <b>${stats.feedbackCount}</b>\n\n` +
+    `🏆 Leader:\n${leaderLine}`;
+
+  await showPanel(chatId, adminId, text, backHomeKeyboard('ap:competition'), panelMsgId);
   return true;
 }
 
-// ─── Resource: List ────────────────────────────────────────────
+// ─── Competition: Top Referrers (paginated) ────────────────────
+
+const PAGE_SIZE = 10;
+
+// Medal emojis for top 3, numbered for the rest
+const RANK_EMOJI = ['🥇', '🥈', '🥉'];
+
+/**
+ * Format a single leaderboard entry.
+ * @param {object} row
+ * @param {number} globalRank  1-based absolute rank
+ */
+function _formatEntry(row, globalRank) {
+  const medal = RANK_EMOJI[globalRank - 1] || `#${globalRank}`;
+  const name = escapeHtml(row.first_name || '—');
+  const uname = row.username ? `📛 @${escapeHtml(row.username)}\n` : '';
+  return (
+    `${medal} <b>${medal.length > 2 ? '' : ' '}${name}</b>\n` +
+    `${uname}` +
+    `🆔 <code>${row.telegram_id}</code>\n` +
+    `✅ Verified: <b>${row.verified_count}</b>\n` +
+    `⏳ Pending: <b>${row.pending_count}</b>\n` +
+    `📈 Total: <b>${row.total_referrals}</b>`
+  );
+}
+
+async function handleCompTop(chatId, adminId, panelMsgId, page = 1) {
+  const result = await adminPanelService.getLeaderboardPage(page, PAGE_SIZE);
+
+  if (!result.rows.length) {
+    await showPanel(chatId, adminId,
+      '🏆 <b>Top Referrers</b>\n\nNo competition data yet.',
+      backHomeKeyboard('ap:competition'),
+      panelMsgId
+    );
+    return true;
+  }
+
+  const offset = (result.page - 1) * PAGE_SIZE;
+  const entries = result.rows.map((row, i) => _formatEntry(row, offset + i + 1));
+
+  const pageInfo = result.totalPages > 1
+    ? `\nPage <b>${result.page}</b> of <b>${result.totalPages}</b>`
+    : '';
+
+  const text =
+    `🏆 <b>Top Referrers</b>${pageInfo}\n\n` +
+    entries.join('\n────────────────\n');
+
+  await showPanel(chatId, adminId, text,
+    leaderboardPagingKeyboard(result.page, result.totalPages),
+    panelMsgId
+  );
+
+  logger.info('Leaderboard page displayed', { page: result.page, total: result.total });
+  return true;
+}
+
+// ─── Competition: Search Participant ──────────────────────────
+
+async function startSearchParticipant(chatId, adminId, panelMsgId) {
+  startFlow(adminId, FLOWS.SEARCH_PARTICIPANT, {
+    panelMessageId: panelMsgId,
+    step: STEPS.AWAITING_SEARCH_QUERY,
+  });
+  await showPanel(chatId, adminId,
+    '🔍 <b>Search Participant</b>\n\nSend a Telegram ID or @username.',
+    cancelKeyboard(),
+    panelMsgId
+  );
+  return true;
+}
+
+async function handleSearchParticipantStep(chatId, message, session) {
+  const { panelMessageId } = session;
+  const query = (message.text || '').trim();
+
+  if (!query) {
+    await showPanel(chatId, chatId,
+      '🔍 <b>Search Participant</b>\n\n⚠ Please send a Telegram ID or @username.',
+      cancelKeyboard(),
+      panelMessageId
+    );
+    return true;
+  }
+
+  const participant = await adminPanelService.searchParticipant(query);
+
+  clearAdminSession(chatId);
+  startFlow(chatId, FLOWS.IDLE, { panelMessageId });
+
+  if (!participant) {
+    await showPanel(chatId, chatId,
+      `❌ <b>User not found.</b>\n\nQuery: <code>${escapeHtml(query)}</code>`,
+      backHomeKeyboard('ap:competition'),
+      panelMessageId
+    );
+    return true;
+  }
+
+  const name = escapeHtml(participant.first_name || '—');
+  const uname = participant.username
+    ? `📛 @${escapeHtml(participant.username)}\n`
+    : '';
+  const rankLine = participant.rank !== null && participant.rank !== undefined
+    ? `🏆 Rank: <b>#${participant.rank}</b>\n`
+    : '';
+  const regDate = participant.created_at
+    ? `📅 Registered: <b>${String(participant.created_at).slice(0, 10)}</b>\n`
+    : '';
+
+  const text =
+    `🔍 <b>Participant Found</b>\n\n` +
+    `👤 ${name}\n` +
+    `${uname}` +
+    `🆔 <code>${participant.telegram_id}</code>\n` +
+    `${rankLine}` +
+    `✅ Verified Referrals: <b>${participant.verified_count}</b>\n` +
+    `⏳ Pending Referrals: <b>${participant.pending_count}</b>\n` +
+    `📈 Total Referrals: <b>${participant.total_referrals}</b>\n` +
+    `${regDate}`;
+
+  await showPanel(chatId, chatId, text, backHomeKeyboard('ap:competition'), panelMessageId);
+  return true;
+}
+
+// ─── Competition: Stats (Competition submenu stats) ────────────
+
+async function handleCompStats(chatId, adminId, panelMsgId) {
+  // Reuse the main stats handler — same data, same screen
+  return handleStatsCallback(chatId, adminId, panelMsgId);
+}
+
+// ─── Competition: Export CSV ───────────────────────────────────
+
+async function handleCompExport(chatId, adminId, panelMsgId) {
+  const rows = await adminPanelService.getLeaderboardCsvData();
+
+  if (!rows.length) {
+    await showPanel(chatId, adminId,
+      '📤 No competition data to export.',
+      backHomeKeyboard('ap:competition'),
+      panelMsgId
+    );
+    return true;
+  }
+
+  // Build CSV
+  const today = new Date().toISOString().slice(0, 10);
+  const filename = `competition_results_${today}.csv`;
+  const header = 'rank,telegram_id,username,first_name,verified,pending,total,registered_at';
+  const csvRows = rows.map((r, i) => {
+    const esc = (v) => String(v || '').replace(/"/g, '""');
+    return [
+      i + 1,
+      r.telegram_id,
+      `"${esc(r.username)}"`,
+      `"${esc(r.first_name)}"`,
+      r.verified_count,
+      r.pending_count,
+      r.total_referrals,
+      `"${esc(String(r.created_at || '').slice(0, 10))}"`,
+    ].join(',');
+  });
+  const csv = [header, ...csvRows].join('\n');
+
+  // Send as document (no disk I/O)
+  const { Readable } = require('stream');
+  const FormData = require('form-data');
+  const axios = require('axios');
+  const { TELEGRAM_API } = require('../../config/env');
+
+  const form = new FormData();
+  form.append('chat_id', String(chatId));
+  form.append('document', Readable.from([csv]), {
+    filename,
+    contentType: 'text/csv',
+  });
+  form.append('caption', `📤 Competition results — ${today}\nTotal participants: ${rows.length}`);
+
+  try {
+    await axios.post(`${TELEGRAM_API}/sendDocument`, form, {
+      headers: form.getHeaders(),
+      timeout: 60000,
+    });
+    logger.info('CSV exported', { filename, rows: rows.length });
+  } catch (err) {
+    logger.error('CSV export send failed', { message: err.message });
+    await showPanel(chatId, adminId,
+      `❌ Export failed: ${escapeHtml(err.message)}`,
+      backHomeKeyboard('ap:competition'),
+      panelMsgId
+    );
+    return true;
+  }
+
+  await showPanel(chatId, adminId,
+    `✅ <b>Export complete.</b>\n\n${rows.length} participants exported to <code>${filename}</code>`,
+    backHomeKeyboard('ap:competition'),
+    panelMsgId
+  );
+  return true;
+}
 
 async function handleListResources(chatId, adminId, panelMsgId) {
   const resources = await adminPanelService.listAllResources();
@@ -482,85 +701,6 @@ async function handleBroadcastConfirm(chatId, adminId, panelMsgId) {
   return true;
 }
 
-// ─── Competition actions ───────────────────────────────────────
-
-async function handleCompTop(chatId, adminId, panelMsgId) {
-  const top = await referralsService.getTopReferrers(15);
-  const formatted = adminService.formatTop(top);
-  await showPanel(chatId, adminId, formatted, backHomeKeyboard('ap:competition'), panelMsgId);
-  return true;
-}
-
-async function handleCompStats(chatId, adminId, panelMsgId) {
-  const stats = await adminPanelService.getPanelStats();
-  const text =
-    `📊 <b>Competition Stats</b>\n\n` +
-    `👥 Total users: <b>${stats.totalUsers}</b>\n` +
-    `✅ Verified referrals: <b>${stats.verifiedReferrals}</b>`;
-  await showPanel(chatId, adminId, text, backHomeKeyboard('ap:competition'), panelMsgId);
-  return true;
-}
-
-async function handleCompExport(chatId, adminId, panelMsgId) {
-  // Fetch all verified referrals and stream as CSV document
-  const top = await referralsService.getTopReferrers(1000);
-  if (!top.length) {
-    await showPanel(chatId, adminId,
-      '📥 No verified referrals to export.',
-      backHomeKeyboard('ap:competition'),
-      panelMsgId
-    );
-    return true;
-  }
-
-  // Build CSV string
-  const header = 'telegram_id,username,first_name,verified_count';
-  const rows = top.map((r) => {
-    const name = (r.first_name || '').replace(/,/g, ' ');
-    const uname = (r.username || '').replace(/,/g, ' ');
-    return `${r.telegram_id},${uname},${name},${r.verified_count}`;
-  });
-  const csv = [header, ...rows].join('\n');
-
-  // Send as a document using Buffer so no disk I/O is needed
-  const { Readable } = require('stream');
-  const FormData = require('form-data');
-  const { apiPost } = require('../../services/telegram');
-
-  const form = new FormData();
-  form.append('chat_id', String(chatId));
-  const stream = Readable.from([csv]);
-  form.append('document', stream, {
-    filename: `referrals_export_${Date.now()}.csv`,
-    contentType: 'text/csv',
-  });
-  form.append('caption', '📥 Referrals CSV export');
-
-  try {
-    const axios = require('axios');
-    const { TELEGRAM_API } = require('../../config/env');
-    await axios.post(`${TELEGRAM_API}/sendDocument`, form, {
-      headers: form.getHeaders(),
-      timeout: 60000,
-    });
-  } catch (err) {
-    logger.error('CSV export send failed', { message: err.message });
-    await showPanel(chatId, adminId,
-      `❌ Export failed: ${escapeHtml(err.message)}`,
-      backHomeKeyboard('ap:competition'),
-      panelMsgId
-    );
-    return true;
-  }
-
-  await showPanel(chatId, adminId,
-    '✅ CSV exported and sent above.',
-    backHomeKeyboard('ap:competition'),
-    panelMsgId
-  );
-  return true;
-}
-
 // ─── Admin message wizard interceptor ────────────────────────
 
 /**
@@ -610,6 +750,11 @@ async function handleAdminMessage(message) {
     // ── Broadcast wizard ─────────────────────────────────────
     if (flow === FLOWS.BROADCAST && step === STEPS.AWAITING_CONTENT) {
       return await handleBroadcastStep(chatId, message, session);
+    }
+
+    // ── Search Participant wizard ─────────────────────────────
+    if (flow === FLOWS.SEARCH_PARTICIPANT && step === STEPS.AWAITING_SEARCH_QUERY) {
+      return await handleSearchParticipantStep(chatId, message, session);
     }
 
   } catch (err) {

@@ -117,11 +117,39 @@ function competitionKeyboard() {
   return {
     inline_keyboard: [
       [{ text: '🏆 Top Referrers', callback_data: 'ap:comp:top' }],
+      [{ text: '🔍 Search Participant', callback_data: 'ap:comp:search' }],
       [{ text: '📊 Statistics', callback_data: 'ap:comp:stats' }],
-      [{ text: '📥 Export CSV', callback_data: 'ap:comp:export' }],
+      [{ text: '📤 Export Results', callback_data: 'ap:comp:export' }],
       ...NAV,
     ],
   };
+}
+
+/**
+ * Pagination keyboard for the leaderboard.
+ * @param {number} page        current 1-based page
+ * @param {number} totalPages
+ */
+function leaderboardPagingKeyboard(page, totalPages) {
+  const nav = [];
+
+  if (page > 1) {
+    nav.push({ text: '⬅ Previous', callback_data: `ap:comp:page:${page - 1}` });
+  }
+  if (page < totalPages) {
+    nav.push({ text: '➡ Next', callback_data: `ap:comp:page:${page + 1}` });
+  }
+
+  const rows = [];
+  if (nav.length) rows.push(nav);
+
+  rows.push([
+    { text: '⬅ Back', callback_data: 'ap:competition' },
+    { text: '🏠 Home', callback_data: 'ap:home' },
+    { text: '❌ Close', callback_data: 'ap:close' },
+  ]);
+
+  return { inline_keyboard: rows };
 }
 
 // ─── Remove-book list ─────────────────────────────────────────
@@ -188,6 +216,7 @@ module.exports = {
   broadcastKeyboard,
   broadcastConfirmKeyboard,
   competitionKeyboard,
+  leaderboardPagingKeyboard,
   resourceListKeyboard,
   confirmDeleteKeyboard,
   cancelKeyboard,

@@ -121,15 +121,13 @@ async function broadcastDocument(fileId, caption = '') {
  * Counts joined_channel users directly since users.js has no dedicated helper.
  */
 async function getPanelStats() {
-  const [totalUsers, verifiedReferrals, feedbackCount, totalResources] = await Promise.all([
+  const [totalUsers, feedbackCount, totalResources, compStats] = await Promise.all([
     usersService.countUsers(),
-    referralsService.countVerifiedReferrals(),
     feedbackService.countFeedbacks(),
     countResources(),
+    referralsService.getCompetitionStats(),
   ]);
 
-  // Count users that joined channel — direct query is fine here since
-  // it's stats-only and users.js has no countJoinedChannel helper.
   let joinedChannel = 0;
   try {
     const { count, error } = await supabase
@@ -148,8 +146,30 @@ async function getPanelStats() {
     joinedChannel,
     feedbackCount,
     totalResources,
-    verifiedReferrals,
+    // from compStats
+    verifiedReferrals: compStats.verifiedReferrals,
+    pendingReferrals: compStats.pendingReferrals,
+    totalReferrals: compStats.totalReferrals,
+    uniqueReferrers: compStats.uniqueReferrers,
+    leader: compStats.leader,
   };
+}
+
+// ─── Leaderboard / competition (delegates to referrals.js) ───
+
+/** Paginated leaderboard. */
+async function getLeaderboardPage(page, pageSize) {
+  return referralsService.getLeaderboardPage(page, pageSize);
+}
+
+/** Search a participant by ID or @username. */
+async function searchParticipant(query) {
+  return referralsService.searchParticipant(query);
+}
+
+/** Full leaderboard data for CSV export. */
+async function getLeaderboardCsvData() {
+  return referralsService.getLeaderboardCsvData();
 }
 
 module.exports = {
@@ -168,4 +188,8 @@ module.exports = {
   broadcastDocument,
   // Stats
   getPanelStats,
+  // Leaderboard / competition
+  getLeaderboardPage,
+  searchParticipant,
+  getLeaderboardCsvData,
 };

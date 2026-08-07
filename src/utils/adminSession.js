@@ -33,6 +33,7 @@ const FLOWS = {
   RENAME_BOOK: 'rename_book',
   UPDATE_DERS: 'update_ders',
   BROADCAST: 'broadcast',
+  SEARCH_PARTICIPANT: 'search_participant',
 };
 
 /** Steps within each flow. */
@@ -56,6 +57,9 @@ const STEPS = {
   // broadcast
   AWAITING_CONTENT: 'awaiting_content',
   AWAITING_BROADCAST_CONFIRM: 'awaiting_broadcast_confirm',
+
+  // search_participant
+  AWAITING_SEARCH_QUERY: 'awaiting_search_query',
 };
 
 // Internal namespace to keep admin sessions separate from user sessions
