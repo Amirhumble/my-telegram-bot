@@ -76,13 +76,16 @@ async function runVerificationSweep() {
           });
         } else if (result.reason === 'not_member') {
           stats.skipped += 1;
-          logger.debug('Referral cron: not a member yet', {
+          logger.info('Referral cron: not a member yet', {
             referral_id: referral.id,
             referred_id: referral.referred_id,
           });
         } else if (result.reason === 'telegram_error') {
           stats.failed += 1;
           // already logged inside autoVerifyReferral
+        } else if (result.reason === 'already_verified') {
+          // Race condition — another process verified it; treat as success
+          stats.verified += 1;
         }
       } catch (err) {
         // One failure must not stop the remaining checks
@@ -122,12 +125,13 @@ function startCron() {
   }
 
   cronTask = cron.schedule(CRON_SCHEDULE, () => {
+    logger.info('Referral cron: job triggered', { schedule: CRON_SCHEDULE });
     runVerificationSweep().catch((err) => {
       logger.error('Referral cron: unhandled sweep error', { message: err.message });
     });
   });
 
-  logger.info('Referral cron: background job registered', { schedule: CRON_SCHEDULE });
+  logger.info('Referral verification scheduler started', { schedule: CRON_SCHEDULE });
 }
 
 /**

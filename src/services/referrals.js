@@ -509,8 +509,11 @@ function buildInvitationLink(telegramId, botUsername) {
  * Used by both Layer 2 (per-message check) and Layer 3 (cron job).
  *
  * Does nothing if the referral is already verified.
- * Updates last_checked_at and check_attempts regardless of outcome
- * (columns are optional — query is safe if migration 003 hasn't run yet).
+ *
+ * Tracking columns (last_checked_at, check_attempts) are written only when
+ * migration 003 has been applied — detected by their presence on the row object.
+ * The core verified=true update NEVER includes optional columns so it cannot
+ * fail due to a missing column in the database.
  *
  * @param {object} referral  - row from the referrals table
  * @returns {{ verified: boolean, reason: string }}
@@ -522,39 +525,50 @@ async function autoVerifyReferral(referral) {
 
   const referredId = Number(referral.referred_id);
 
-  // Build the update payload, but only include tracking columns when present
-  // in the row (safe for both pre- and post-migration 003 schemas).
-  const trackingUpdate = {};
-  if ('last_checked_at' in referral || referral.last_checked_at !== undefined) {
-    trackingUpdate.last_checked_at = new Date().toISOString();
-  }
-  if ('check_attempts' in referral || referral.check_attempts !== undefined) {
-    trackingUpdate.check_attempts = (Number(referral.check_attempts) || 0) + 1;
-  }
+  // Detect whether migration 003 tracking columns exist on this row.
+  // Supabase SELECT '*' returns all existing columns; if the column isn't
+  // present in the result object, the migration hasn't been applied yet.
+  const hasTrackingCols =
+    'last_checked_at' in referral && 'check_attempts' in referral;
 
-  // Always record the attempt even if the tracking columns don't exist yet —
-  // the update will simply ignore unknown fields in Supabase.
-  const attemptPayload = {
-    last_checked_at: new Date().toISOString(),
-    check_attempts: (Number(referral.check_attempts) || 0) + 1,
-  };
+  logger.info('autoVerifyReferral: checking membership', {
+    referral_id: referral.id,
+    referred_id: referredId,
+    has_tracking_columns: hasTrackingCols,
+  });
 
   let isMember = false;
   try {
     isMember = await telegram.isChannelMember(referredId);
+    logger.info('autoVerifyReferral: membership status', {
+      referral_id: referral.id,
+      referred_id: referredId,
+      is_member: isMember,
+    });
   } catch (err) {
     logger.warn('autoVerifyReferral: membership check failed', {
       referred_id: referredId,
       referral_id: referral.id,
       message: err.message,
     });
-    // Persist the attempt count even on Telegram error, best-effort
-    await _updateAttempt(referral.id, attemptPayload).catch(() => {});
+    // Best-effort: record the attempt if tracking columns exist
+    if (hasTrackingCols) {
+      await _updateAttempt(referral.id, {
+        last_checked_at: new Date().toISOString(),
+        check_attempts: (Number(referral.check_attempts) || 0) + 1,
+      }).catch(() => {});
+    }
     return { verified: false, reason: 'telegram_error' };
   }
 
   if (!isMember) {
-    await _updateAttempt(referral.id, attemptPayload).catch(() => {});
+    // Best-effort: record the attempt if tracking columns exist
+    if (hasTrackingCols) {
+      await _updateAttempt(referral.id, {
+        last_checked_at: new Date().toISOString(),
+        check_attempts: (Number(referral.check_attempts) || 0) + 1,
+      }).catch(() => {});
+    }
     return { verified: false, reason: 'not_member' };
   }
 
@@ -566,27 +580,47 @@ async function autoVerifyReferral(referral) {
     });
   });
 
-  // Mark the referral verified
+  // ── Core update: only verified=true — NO optional columns ──
+  // This is the fix for the critical bug: including last_checked_at or
+  // check_attempts in this payload caused Supabase to reject the entire
+  // update when migration 003 had not been applied, leaving the referral
+  // permanently unverified.
+  const coreUpdate = { verified: true };
+
+  // Optionally also update tracking columns if they exist
+  if (hasTrackingCols) {
+    coreUpdate.last_checked_at = new Date().toISOString();
+    coreUpdate.check_attempts = (Number(referral.check_attempts) || 0) + 1;
+  }
+
   const { data, error } = await supabase
     .from('referrals')
-    .update({
-      verified: true,
-      last_checked_at: new Date().toISOString(),
-      check_attempts: (Number(referral.check_attempts) || 0) + 1,
-    })
+    .update(coreUpdate)
     .eq('id', referral.id)
+    .eq('verified', false)   // idempotency guard: skip if already verified
     .select()
-    .single();
+    .maybeSingle();
 
   if (error) {
     logger.error('autoVerifyReferral: update failed', {
       referral_id: referral.id,
       message: error.message,
+      code: error.code,
+      hint: error.hint,
     });
     throw new AppError('Failed to auto-verify referral', {
       code: 'DB_AUTO_VERIFY',
       details: error,
     });
+  }
+
+  // data is null when the idempotency guard (verified=false) prevented the update
+  // — meaning another process already verified it between our check and update.
+  if (!data) {
+    logger.info('autoVerifyReferral: already verified by another process (idempotent skip)', {
+      referral_id: referral.id,
+    });
+    return { verified: true, reason: 'already_verified' };
   }
 
   logger.info('Referral auto-verified', {

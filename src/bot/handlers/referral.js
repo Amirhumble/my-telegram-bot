@@ -13,6 +13,10 @@ async function handleJoinedCallback(callbackQuery) {
   const chatId = callbackQuery.message?.chat?.id;
   const callbackId = callbackQuery.id;
 
+  // Answer immediately — Telegram times out if we don't respond within ~10s.
+  // Do this before any DB or Telegram API work.
+  await telegram.answerCallbackQuery(callbackId, '');
+
   const result = await referralsService.verifyReferral(from.id);
 
   logger.info('Joined channel callback', {
@@ -21,12 +25,6 @@ async function handleJoinedCallback(callbackQuery) {
   });
 
   if (result.reason === 'not_member') {
-    await telegram.answerCallbackQuery(
-      callbackId,
-      'You have not joined the channel yet. Please join first.',
-      true
-    );
-
     if (chatId) {
       await telegram.sendMessage(
         chatId,
@@ -36,8 +34,6 @@ async function handleJoinedCallback(callbackQuery) {
     }
     return;
   }
-
-  await telegram.answerCallbackQuery(callbackId, 'Thank you! Membership confirmed.');
 
   if (chatId) {
     // Do NOT reveal points/referral counts to the user
