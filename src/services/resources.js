@@ -100,6 +100,7 @@ async function sendDersProgram(chatId) {
 
 /**
  * Send all PDF soft copies using stored file_ids.
+ * Caller is responsible for sending a loading message BEFORE calling this.
  */
 async function sendSoftCopies(chatId) {
   const pdfs = await getResourcesByType('pdf');
@@ -111,8 +112,6 @@ async function sendSoftCopies(chatId) {
     );
     return { ok: false, reason: 'not_found' };
   }
-
-  await telegram.sendMessage(chatId, '⏳ ኪታቦቹ እየተላኩ ነው...');
 
   for (const pdf of pdfs) {
     try {

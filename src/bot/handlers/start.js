@@ -5,16 +5,27 @@ const referralsService = require('../../services/referrals');
 const telegram = require('../../services/telegram');
 const { mainMenuKeyboard } = require('../keyboards/mainMenu');
 const { channelJoinKeyboard } = require('../keyboards/channelJoin');
+const { sendLoading, LOADING } = require('../../utils/userFeedback');
 const logger = require('../../utils/logger');
 
 /**
  * Handle /start and /start <referrerId>
+ *
+ * UX flow:
+ *   1. Send immediate loading feedback
+ *   2. Upsert user + record referral (DB work)
+ *   3. Send welcome message
+ *   4. If referred: send channel join prompt
  */
 async function handleStart(message) {
   const chatId = message.chat.id;
   const from = message.from || {};
   const text = message.text || '';
 
+  // Step 1 — Immediate feedback before any DB work
+  await sendLoading(chatId, LOADING.START);
+
+  // Step 2 — DB work
   const user = await usersService.upsertUser({
     telegramId: from.id,
     username: from.username,
@@ -41,6 +52,7 @@ async function handleStart(message) {
     }
   }
 
+  // Step 3 — Welcome message
   const welcome =
     `እንኳን በደህና መጡ${user?.first_name ? ', ' + user.first_name : ''}።\n` +
     `ከታች ያለውን <b>Menu</b> በመጫን አገልግሎቶችን ያገኛሉ።` +
@@ -50,7 +62,7 @@ async function handleStart(message) {
     reply_markup: mainMenuKeyboard(),
   });
 
-  // Always offer channel join for referred users (and gently for everyone)
+  // Step 4 — Channel join prompt for referred users
   if (payload && /^\d+$/.test(payload)) {
     await telegram.sendMessage(
       chatId,
