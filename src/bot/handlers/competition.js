@@ -6,6 +6,7 @@ const telegram = require('../../services/telegram');
 const { BOT_USERNAME } = require('../../config/env');
 const { mainMenuKeyboard } = require('../keyboards/mainMenu');
 const { sendLoading, sendUserError, LOADING } = require('../../utils/userFeedback');
+const { acquire, release, OPS } = require('../../utils/userOperationLock');
 const logger = require('../../utils/logger');
 
 /**
@@ -13,26 +14,30 @@ const logger = require('../../utils/logger');
  * Shows invitation link only — never points or rankings.
  *
  * UX flow:
- *   1. Send immediate loading feedback
- *   2. Upsert user
- *   3. Build and send the referral link
+ *   1. Acquire per-user lock (bail if already running)
+ *   2. Send immediate loading feedback
+ *   3. Upsert user + build and send referral link
+ *   4. Release lock in finally
  */
 async function handleCompetitionLink(message) {
   const from = message.from || {};
   const chatId = message.chat.id;
+  const userId = from.id;
 
-  // Step 1 — Immediate feedback
-  await sendLoading(chatId, LOADING.COMPETITION);
+  if (!acquire(userId, OPS.COMPETITION)) {
+    await sendLoading(chatId, LOADING.ALREADY_PROCESSING);
+    return;
+  }
 
   try {
-    // Step 2 — Upsert user
+    await sendLoading(chatId, LOADING.COMPETITION);
+
     await usersService.upsertUser({
       telegramId: from.id,
       username: from.username,
       firstName: from.first_name,
     });
 
-    // Step 3 — Build link (synchronous, no DB needed) and send
     const link = referralsService.buildInvitationLink(from.id, BOT_USERNAME);
 
     const text =
@@ -48,6 +53,8 @@ async function handleCompetitionLink(message) {
   } catch (err) {
     logger.error('handleCompetitionLink failed', { chatId, message: err.message });
     await sendUserError(chatId, mainMenuKeyboard());
+  } finally {
+    release(userId, OPS.COMPETITION);
   }
 }
 

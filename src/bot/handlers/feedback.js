@@ -7,16 +7,14 @@ const { setSession, getSession, clearSession } = require('../../utils/session');
 const { mainMenuKeyboard } = require('../keyboards/mainMenu');
 const { BUTTONS } = require('../keyboards/mainMenu');
 const { sendLoading, sendUserError, LOADING } = require('../../utils/userFeedback');
+const { acquire, release, OPS } = require('../../utils/userOperationLock');
 const logger = require('../../utils/logger');
 
 const FEEDBACK_STATE = 'awaiting_feedback';
 
 /**
  * User pressed Feedback button or sent bare /feedback.
- * Enter multi-step flow: next free-text message is the feedback.
- *
- * No loading message here — we're just prompting the user,
- * which is itself the immediate response.
+ * Just prompts — no slow work here, no lock needed.
  */
 async function promptFeedback(message) {
   const from = message.from || {};
@@ -30,7 +28,6 @@ async function promptFeedback(message) {
     });
   } catch (err) {
     logger.warn('promptFeedback: upsertUser failed', { message: err.message });
-    // Non-fatal — continue to show the prompt
   }
 
   setSession(from.id, { state: FEEDBACK_STATE });
@@ -40,9 +37,7 @@ async function promptFeedback(message) {
   });
 }
 
-/**
- * Legacy: /feedback my message  (single command with text)
- */
+/** Legacy: /feedback my message (single command with text) */
 async function handleFeedbackCommand(message) {
   const text = message.text || '';
   const feedbackText = text.replace(/^\/feedback(@\w+)?/i, '').trim();
@@ -68,7 +63,6 @@ async function maybeHandlePendingFeedback(message) {
 
   const text = (message.text || '').trim();
 
-  // If they pressed another menu button, cancel feedback mode and let router handle it
   const menuValues = Object.values(BUTTONS);
   if (menuValues.includes(text) || text.startsWith('/')) {
     clearSession(from.id);
@@ -83,27 +77,31 @@ async function maybeHandlePendingFeedback(message) {
  * Submit feedback.
  *
  * UX flow:
- *   1. Send immediate loading feedback
- *   2. Upsert user
- *   3. Save feedback (also notifies admin)
+ *   1. Acquire per-user lock (bail if already submitting)
+ *   2. Send immediate loading feedback
+ *   3. Upsert user + save feedback
  *   4. Confirm to user
+ *   5. Release lock in finally
  */
 async function submitFeedback(message, feedbackText) {
   const from = message.from || {};
   const chatId = message.chat.id;
+  const userId = from.id;
 
-  // Step 1 — Immediate feedback before DB work
-  await sendLoading(chatId, LOADING.FEEDBACK);
+  if (!acquire(userId, OPS.FEEDBACK)) {
+    await sendLoading(chatId, LOADING.ALREADY_PROCESSING);
+    return;
+  }
 
   try {
-    // Step 2 — Upsert user
+    await sendLoading(chatId, LOADING.FEEDBACK);
+
     await usersService.upsertUser({
       telegramId: from.id,
       username: from.username,
       firstName: from.first_name,
     });
 
-    // Step 3 — Save feedback
     const result = await feedbackService.saveFeedback({
       telegramId: from.id,
       username: from.username,
@@ -132,7 +130,6 @@ async function submitFeedback(message, feedbackText) {
       }
     }
 
-    // Step 4 — Confirm
     await telegram.sendMessage(chatId, '✅ እናመሰግናለን!', {
       reply_markup: mainMenuKeyboard(),
     });
@@ -140,6 +137,8 @@ async function submitFeedback(message, feedbackText) {
     logger.error('submitFeedback failed', { chatId, message: err.message });
     clearSession(from.id);
     await sendUserError(chatId, mainMenuKeyboard());
+  } finally {
+    release(userId, OPS.FEEDBACK);
   }
 }
 

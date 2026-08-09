@@ -26,14 +26,15 @@ const telegram = require('../services/telegram');
 // Exported so callers can reference them directly if needed.
 
 const LOADING = {
-  GENERAL:      '⏳ እባክዎ ይጠብቁ...',
-  SOFT_COPIES:  '⏳ እባክዎ ይጠብቁ...\n📚 ኪታቦቹ እየተዘጋጁ ነው።',
-  DERS_PROGRAM: '⏳ እባክዎ ይጠብቁ...\n📅 የደርስ ፕሮግራሙ እየተዘጋጀ ነው።',
-  COMPETITION:  '⏳ እባክዎ ይጠብቁ...\n🔗 የግል የግብዣ ሊንክዎ እየተዘጋጀ ነው።',
-  FEEDBACK:     '⏳ እባክዎ ይጠብቁ...\n📩 አስተያየትዎን እየላክን ነው።',
-  MEMBERSHIP:   '⏳ ቻናሉን እየተፈተሸ ነው...',
-  START:        '⏳ እባክዎ ይጠብቁ...',
-  ERROR:        '❌ ይቅርታ፣ አሁን ይህን አገልግሎት ማጠናቀቅ አልተቻለም።\nእባክዎ እንደገና ይሞክሩ።',
+  GENERAL:            '⏳ እባክዎ ይጠብቁ...',
+  SOFT_COPIES:        '⏳ እባክዎ ይጠብቁ...\n📚 ኪታቦቹ እየተዘጋጁ ነው።',
+  DERS_PROGRAM:       '⏳ እባክዎ ይጠብቁ...\n📅 የደርስ ፕሮግራሙ እየተዘጋጀ ነው።',
+  COMPETITION:        '⏳ እባክዎ ይጠብቁ...\n🔗 የግል የግብዣ ሊንክዎ እየተዘጋጀ ነው።',
+  FEEDBACK:           '⏳ እባክዎ ይጠብቁ...\n📩 አስተያየትዎን እየላክን ነው።',
+  MEMBERSHIP:         '⏳ ቻናሉን እየተፈተሸ ነው...',
+  START:              '⏳ እባክዎ ይጠብቁ...',
+  ALREADY_PROCESSING: '⏳ እባክዎ ይጠብቁ...\nአስቀድሞ እየተከናወነ ነው።',
+  ERROR:              '❌ ይቅርታ፣ አሁን ይህን አገልግሎት ማጠናቀቅ አልተቻለም።\nእባክዎ እንደገና ይሞክሩ።',
 };
 
 /**
