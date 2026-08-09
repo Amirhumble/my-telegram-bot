@@ -127,7 +127,7 @@ async function seedOne(resource) {
 
 async function main() {
   logger.info('=== Resource seed starting ===');
-  logger.info('Upload target chat', { ADMIN_CHAT_ID });
+  logger.info('Upload target: admin chat (configured via ADMIN_CHAT_ID)');
 
   const results = [];
 

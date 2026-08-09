@@ -120,14 +120,23 @@ async function verifyReferral(referredId) {
     .from('referrals')
     .update({ verified: true })
     .eq('id', referral.id)
+    .eq('verified', false)   // idempotency guard — prevents double-count if cron races with manual verify
     .select()
-    .single();
+    .maybeSingle();
 
   if (error) {
     throw new AppError('Failed to verify referral', {
       code: 'DB_VERIFY_REFERRAL',
       details: error,
     });
+  }
+
+  // maybeSingle() returns null if the row was already verified by another path
+  if (!data) {
+    logger.info('Referral already verified by another process (idempotent skip)', {
+      referral_id: referral.id,
+    });
+    return { ok: true, reason: 'already_verified', verified: true };
   }
 
   logger.info('Referral verified', {

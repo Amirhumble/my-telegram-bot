@@ -28,7 +28,6 @@ const {
   startFlow,
   getAdminSession,
   updateAdminSession,
-  setStep,
   clearAdminSession,
 } = require('../../utils/adminSession');
 const {
