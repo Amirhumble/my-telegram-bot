@@ -48,7 +48,7 @@ async function handleStart(message) {
 
     if (result.ok) {
       referralNote =
-        '\n\n📢 እባክዎ ቻናላችንን ይቀላቀሉ። ከተቀላቀሉ በኋላ ወደ እዚህ ተመልሰው<b>✅ I Joined</b> የሚለውን ይጫኑ።';
+        '\n\n📢 እባክዎ ቻናላችንን ይቀላቀሉ። ከተቀላቀሉ በኋላ ወደ እዚህ ተመልሰው<b>✅ ቻናሉን ተቀላቅያለው</b> የሚለውን ይጫኑ።';
     }
   }
 
@@ -66,7 +66,7 @@ async function handleStart(message) {
   if (payload && /^\d+$/.test(payload)) {
     await telegram.sendMessage(
       chatId,
-      'ቻናሉን ከተቀላቀሉ በኋላ ከታች ያለውን ቁልፍ ይጫኑ፦',
+      'ቻናሉን ከተቀላቀሉ በኋላ ከታች ያለውን ቻናሉን ተቀላቅያለው የሚለውን ቁልፍ ይጫኑ፦',
       { reply_markup: channelJoinKeyboard() }
     );
   }

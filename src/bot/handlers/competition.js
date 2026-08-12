@@ -41,10 +41,10 @@ async function handleCompetitionLink(message) {
     const link = referralsService.buildInvitationLink(from.id, BOT_USERNAME);
 
     const text =
-      `🔗 <b>Your Invitation Link</b>\n\n` +
+      `🔗 <b>የእርሶ የመጋበዣ ሊንክ</b>\n\n` +
       `${link}\n\n` +
-      `Share this link with others.\n\n` +
-      `Eligible referrals are tracked automatically after channel membership verification.`;
+      `ይሄን ሊንክ ኮፒ በማድረግ ያጋሩ\n\n` +
+      `ያጋሩት ሰው ወደ ቻናሉ መቀላቀሉ ከተረጋገጠ በኋላ እርስዎ የግብዣ ነጥቦችኝ ያገኛሉ።\n\n` +
 
     await telegram.sendMessage(chatId, text, {
       reply_markup: mainMenuKeyboard(),
