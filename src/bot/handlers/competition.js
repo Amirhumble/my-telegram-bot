@@ -44,7 +44,7 @@ async function handleCompetitionLink(message) {
       `🔗 <b>የእርሶ የመጋበዣ ሊንክ</b>\n\n` +
       `${link}\n\n` +
       `ይሄን ሊንክ ኮፒ በማድረግ ያጋሩ\n\n` +
-      `ያጋሩት ሰው ወደ ቻናሉ መቀላቀሉ ከተረጋገጠ በኋላ እርስዎ የግብዣ ነጥቦችኝ ያገኛሉ።\n\n` +
+      `ያጋሩት ሰው ወደ ቻናሉ መቀላቀሉ ከተረጋገጠ በኋላ እርስዎ የግብዣ ነጥቦችኝ ያገኛሉ።\n\n`
 
     await telegram.sendMessage(chatId, text, {
       reply_markup: mainMenuKeyboard(),
