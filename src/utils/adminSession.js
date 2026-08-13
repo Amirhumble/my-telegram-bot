@@ -34,6 +34,7 @@ const FLOWS = {
   UPDATE_DERS: 'update_ders',
   BROADCAST: 'broadcast',
   SEARCH_PARTICIPANT: 'search_participant',
+  REPLY_FEEDBACK: 'reply_feedback',
 };
 
 /** Steps within each flow. */
@@ -60,6 +61,9 @@ const STEPS = {
 
   // search_participant
   AWAITING_SEARCH_QUERY: 'awaiting_search_query',
+
+  // reply_feedback
+  AWAITING_REPLY: 'awaiting_reply',
 };
 
 // Internal namespace to keep admin sessions separate from user sessions

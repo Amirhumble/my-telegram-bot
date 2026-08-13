@@ -16,6 +16,10 @@ const {
   handleAdminCallback,
   handleAdminMessage,
 } = require('./adminPanel');
+const {
+  handleFeedbackReplyCallback,
+  maybeHandlePendingAdminReply,
+} = require('./feedbackReply');
 const referralsService = require('../../services/referrals');
 const telegram = require('../../services/telegram');
 const { mainMenuKeyboard } = require('../keyboards/mainMenu');
@@ -58,6 +62,12 @@ async function handleCallbackQuery(callbackQuery) {
     return;
   }
 
+  // ── Admin reply-to-feedback ───────────────────────────────
+  if (data && data.startsWith('feedback:reply:')) {
+    await handleFeedbackReplyCallback(callbackQuery);
+    return;
+  }
+
   // ── Existing callbacks ────────────────────────────────────
   if (data === 'joined_channel') {
     await handleJoinedCallback(callbackQuery);
@@ -84,7 +94,13 @@ async function handleMessage(message) {
     logger.warn('Layer 2 auto-verify threw unexpectedly', { message: err.message });
   });
 
-  // 1) Admin panel wizard interceptor — handles non-text wizard steps too
+  // 1) Admin reply-to-feedback interceptor — owns the pending-reply state
+  //    so it is not swallowed by the admin-panel wizard or treated as
+  //    user feedback.
+  const handledReply = await maybeHandlePendingAdminReply(message);
+  if (handledReply) return;
+
+  // 2) Admin panel wizard interceptor — handles non-text wizard steps too
   //    (PDF uploads, photo uploads, etc.). Must come before all text routing.
   const adminHandled = await handleAdminMessage(message);
   if (adminHandled) return;
@@ -92,24 +108,24 @@ async function handleMessage(message) {
   // Only text messages pass through to the remaining routes
   if (!message.text) return;
 
-  // 2) Multi-step feedback capture (before menu routing)
+  // 3) Multi-step feedback capture (before menu routing)
   const handledFeedback = await maybeHandlePendingFeedback(message);
   if (handledFeedback) return;
 
-  // 3) /admin command — opens inline panel
+  // 4) /admin command — opens inline panel
   if (text === '/admin' || text.startsWith('/admin@')) {
     await handleAdminEntry({ ...message, text: rawText });
     return;
   }
 
-  // 4) Legacy /admin_* text commands (silently no-op for non-admins)
+  // 5) Legacy /admin_* text commands (silently no-op for non-admins)
   if (text.startsWith('/admin_')) {
     const handled = await handleAdminCommand({ ...message, text });
     if (handled) return;
     return;
   }
 
-  // 5) Reply keyboard buttons
+  // 6) Reply keyboard buttons
   if (rawText === BUTTONS.SOFT_COPIES) {
     await handleSoftCopies(message);
     return;
@@ -127,7 +143,7 @@ async function handleMessage(message) {
     return;
   }
 
-  // 6) Slash commands (backward compatible)
+  // 7) Slash commands (backward compatible)
   if (text === '/start' || text.startsWith('/start ')) {
     await handleStart({ ...message, text: rawText });
     return;
